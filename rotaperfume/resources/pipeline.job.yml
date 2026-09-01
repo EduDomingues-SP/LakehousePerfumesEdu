@@ -1,0 +1,162 @@
+# Pipeline rotaperfume_pipeline
+#
+# PIPELINE DE ENTREGAS - EVOLUÇÃO DO JOB:
+#
+# Entrega 1 (prompt_01): raw_conferencia
+#   - Apenas conferência de chegada dos arquivos no Volume
+#
+# Entrega 2: bronze_ingestao
+#   - Ingestão bronze: lê 10 CSVs como string, salva em Delta com metadados
+#   - Tarefas: raw_conferencia + bronze_ingestao
+#
+# Entrega 3: sql_clientes + sql_pedidos + sql_itens_produtos + sql_crm_financeiro
+#   - Silver: limpeza, tipagem, constraints CHECK
+#   - Rodam EM PARALELO entre si (todas dependem só de bronze_ingestao)
+#   - Tarefas: raw_conferencia + bronze_ingestao + 4× sql em paralelo
+#
+# Entrega 4: gold_xxx
+#   - Agregações gold: métricas de negócio, dimensões
+#   - Tarefas: raw_conferencia + bronze_ingestao + silver_transform + gold_agregacao
+#
+# Entrega 5: datamart_xxx (a definir)
+#   - Tabelas analíticas para dashboards
+#   - Tarefas: todas as anteriores + datamart
+#
+# Entrega 6: orquestrador (a definir)
+#   - Task dependency completa entre todas as tarefas
+
+resources:
+  jobs:
+    rotaperfume_pipeline:
+      name: rotaperfume_pipeline
+
+      # Agendamento diário às 6h, timezone São Paulo
+      # Pausado por padrão - sem trigger significa que o job não roda automaticamente
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: America/Sao_Paulo
+        pause_status: PAUSED
+
+      tasks:
+        - task_key: raw_conferencia
+          notebook_task:
+            notebook_path: /Workspace/Users/domingues.edu72@gmail.com/.bundle/rotaperfume/dev/files/src/raw/conferencia
+            base_parameters:
+              catalog: ${var.catalog}
+          timeout_seconds: 3600
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        - task_key: bronze_ingestao
+          depends_on:
+            - task_key: raw_conferencia
+          notebook_task:
+            notebook_path: /Workspace/Users/domingues.edu72@gmail.com/.bundle/rotaperfume/dev/files/src/bronze/ingestao
+            base_parameters:
+              catalog: ${var.catalog}
+          timeout_seconds: 3600
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        # ── 4 sql_task em paralelo, todas dependem só de bronze_ingestao ──────
+        - task_key: sql_clientes
+          depends_on:
+            - task_key: bronze_ingestao
+          sql_task:
+            file:
+              path: silver-01-clientes.sql
+            warehouse_id: ${var.warehouse_id}
+          timeout_seconds: 1800
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        - task_key: sql_pedidos
+          depends_on:
+            - task_key: bronze_ingestao
+          sql_task:
+            file:
+              path: silver-02-pedidos.sql
+            warehouse_id: ${var.warehouse_id}
+          timeout_seconds: 1800
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        - task_key: sql_itens_produtos
+          depends_on:
+            - task_key: bronze_ingestao
+          sql_task:
+            file:
+              path: silver-03-itens-e-produtos.sql
+            warehouse_id: ${var.warehouse_id}
+          timeout_seconds: 1800
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        - task_key: sql_crm_financeiro
+          depends_on:
+            - task_key: bronze_ingestao
+          sql_task:
+            file:
+              path: silver-04-crm-e-financeiro.sql
+            warehouse_id: ${var.warehouse_id}
+          timeout_seconds: 1800
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        # ── 4 tarefas gold: dimensões, fato, marts, testes ───────────────────
+        - task_key: gold_dimensoes
+          depends_on:
+            - task_key: sql_clientes
+            - task_key: sql_pedidos
+            - task_key: sql_itens_produtos
+            - task_key: sql_crm_financeiro
+          sql_task:
+            file:
+              path: 05-dimensoes.sql
+            warehouse_id: ${var.warehouse_id}
+          timeout_seconds: 3600
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        - task_key: gold_fato_vendas
+          depends_on:
+            - task_key: gold_dimensoes
+          sql_task:
+            file:
+              path: 06-fato-vendas.sql
+            warehouse_id: ${var.warehouse_id}
+          timeout_seconds: 3600
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        - task_key: gold_marts
+          depends_on:
+            - task_key: gold_fato_vendas
+          sql_task:
+            file:
+              path: 07-marts.sql
+            warehouse_id: ${var.warehouse_id}
+          timeout_seconds: 3600
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        - task_key: testes
+          depends_on:
+            - task_key: gold_marts
+          sql_task:
+            file:
+              path: 08-testes.sql
+            warehouse_id: ${var.warehouse_id}
+          timeout_seconds: 1800
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com

@@ -1,0 +1,8 @@
+resources:
+  dashboards:
+    dashboard_comercial:
+      display_name: 'Dashboard Comercial — RotaPerfume'
+      file_path: ../src/dashboard-comercial.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog}
+      dataset_schema: gold

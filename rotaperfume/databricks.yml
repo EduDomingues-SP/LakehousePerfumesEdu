@@ -1,0 +1,47 @@
+# This is a Declarative Automation Bundle definition for rotaperfume.
+# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
+bundle:
+  name: rotaperfume
+  uuid: dc4d23f6-40b6-40e6-b214-6194c7bed18f
+
+include:
+  - resources/*.yml
+
+# Variable declarations. These variables are assigned in the dev/prod targets below.
+variables:
+  catalog:
+    description: The catalog to use
+  schema:
+    description: The schema to use
+  warehouse_id:
+    description: SQL Warehouse ID for serverless compute
+
+targets:
+  dev:
+    # IMPORTANT: NÃO use `mode: development` no target dev.
+    # Ele prefixa o nome dos recursos com [dev seu_usuario] — inclusive os SCHEMAS
+    # do Unity Catalog, que virariam dev_fulano_bronze e quebrariam todo o SQL.
+    # Em vez disso, pause o agendamento explicitamente com
+    # `presets: { trigger_pause_status: PAUSED }`.
+    default: true
+    workspace:
+      host: https://dbc-05ef6697-2c19.cloud.databricks.com
+    variables:
+      catalog: lakehouse_rotaperfume
+      schema: ${workspace.current_user.short_name}
+      warehouse_id: d3bd5260fdb359e1
+    presets:
+      trigger_pause_status: PAUSED
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-05ef6697-2c19.cloud.databricks.com
+      # We explicitly deploy to /Workspace/Users/domingues.edu72@gmail.com to make sure we only have a single copy.
+      root_path: /Workspace/Users/domingues.edu72@gmail.com/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog: lakehouse_rotaperfume
+      schema: prod
+      warehouse_id: d3bd5260fdb359e1
+    permissions:
+      - user_name: domingues.edu72@gmail.com
+        level: CAN_MANAGE
