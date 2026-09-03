@@ -160,3 +160,16 @@ resources:
           email_notifications:
             on_failure:
               - domingues.edu72@gmail.com
+
+        # ── Feature Engineering (ML) ──────────────────────────────────────────
+        - task_key: ml_features
+          depends_on:
+            - task_key: testes
+          notebook_task:
+            notebook_path: /Workspace/Users/domingues.edu72@gmail.com/.bundle/rotaperfume/dev/files/src/ml/11-features
+          base_parameters:
+            referencia: ${var.referencia}
+          timeout_seconds: 1800
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
