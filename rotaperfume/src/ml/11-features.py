@@ -63,17 +63,20 @@ def montar_features(referencia: str):
         silver.visitas e gold.dim_produto (apenas data_lancamento).
         NÃO lê de gold.dim_cliente (vazamento).
     """
+    # ── 0. Normalizar referencia para DATE (evita comparação date vs string) ─
+    ref_date = F.to_date(F.lit(referencia))
+
     # ── 1. gold.fato_vendas: base de todas as features RFM, Ritmo e Mix ────
     fato = (
         spark.table(f"{CATALOG}.gold.fato_vendas")
-        .filter(F.col("data_pedido") < F.lit(referencia))
+        .filter(F.col("data_pedido") < ref_date)
     )
 
     # ── 2. silver.oportunidades: features de CRM ──────────────────────────
     # Atenção: a coluna de "ganhou" é `ganancia` (não `ganha`).
     oportunidades = (
         spark.table(f"{CATALOG}.silver.oportunidades")
-        .filter(F.col("data_abertura") < F.lit(referencia))
+        .filter(F.col("data_abertura") < ref_date)
     )
 
     # ── 3. silver.visitas: features de CRM ────────────────────────────────
@@ -81,7 +84,7 @@ def montar_features(referencia: str):
     # com valor 'Pedido realizado' quando gerou pedido.
     visitas = (
         spark.table(f"{CATALOG}.silver.visitas")
-        .filter(F.col("data_visita") < F.lit(referencia))
+        .filter(F.col("data_visita") < ref_date)
     )
 
     # ── 4. gold.dim_produto: apenas para data_lancamento (Mix) ─────────────
@@ -99,23 +102,98 @@ def montar_features(referencia: str):
     # =====================================================================
     # GRUPO 1 — RFM (Recência, Frequência, Valor)
     # =====================================================================
-    rfm = fato.groupBy("cliente_id").agg(
-        F.datediff(F.lit(referencia), F.max("data_pedido"))
-            .cast("double")                                          .alias("recencia_dias"),
+    # ⚠️  VAZAMENTO CORRIGIDO: recencia_dias usa ref_ritmo (= referencia - 7).
+    #
+    # No treino, a janela do alvo é [referencia, referencia+7]. Um cliente
+    # com `recencia_dias = 0` (i.e. último pedido em data_pedido = referencia)
+    # é, com altíssima probabilidade, alguém que comprou NA janela — alvo = 1.
+    # Isso é vazamento direto.
+    #
+    # Correção: usar `ref_ritmo = referencia - 7` no datediff. Assim, a
+    # recência mínima vista pelo modelo é 7 (e não 0), e a feature deixa
+    # de codificar a resposta.
+    #
+    # Para consistencia com o score (referencia = 2026-08-31), ref_ritmo =
+    # 2026-08-24 — a recência reflete "dias desde o último pedido há 7+ dias".
+    # No score, isso significa: "o cliente comprou nos últimos 7 dias? não sei,
+    # só sei que comprou até dia 24-08". O modelo aprende a calibrar isso
+    # sem ter a janela-alvo espelhada na feature.
+    ref_ritmo = F.date_sub(ref_date, 7)
+
+    # ⚠️  CORREÇÃO CRÍTICA DE VAZAMENTO: a recência deve usar o ÚLTIMO PEDIDO
+    # ANTERIOR a `ref_ritmo` (referencia - 7), e não o último pedido anterior
+    # a `referencia`. Sem isso, um cliente com pedido em 2026-07-31 e
+    # referencia = 2026-08-01 ficaria com max(data_pedido) = 2026-07-31
+    # (dentro da janela-alvo 2026-08-01..2026-08-07). O modelo aprende
+    # "recência clampada em 0 ⇒ alvo = 1" (vazamento direto).
+    #
+    # Solução: o agregado principal (somas) usa `fato` (< referencia), mas o
+    # `max(data_pedido)` para a recência é recalculado a partir de
+    # `fato_ritmo` (filtrado por < ref_ritmo). A recência mínima observada
+    # passa a ser 7 (ref_ritmo − max ≤ 0 vira 0) — o que NÃO codifica a
+    # resposta, porque o pior caso (cliente que comprou hoje, no sentido de
+    # 2026-07-31) só ocorre para quem comprou há 7+ dias do corte.
+    fato_ritmo_max = (
+        fato
+        .filter(F.col("data_pedido") < ref_ritmo)
+        .groupBy("cliente_id")
+        .agg(F.max("data_pedido").alias("ultimo_pedido_ritmo"))
+    )
+
+    rfm_base = fato.groupBy("cliente_id").agg(
         F.countDistinct("pedido_id").cast("double")                 .alias("frequencia_pedidos"),
         F.sum("receita").cast("double")                              .alias("valor_total"),
         F.sum("margem").cast("double")                               .alias("margem_total"),
-    ).withColumn(
-        "ticket_medio",
-        F.col("valor_total") / F.nullif(F.col("frequencia_pedidos"), F.lit(0.0))
-    ).withColumn(
-        "margem_percentual",
-        F.col("margem_total") / F.nullif(F.col("valor_total"), F.lit(0.0))
+    )
+
+    rfm = (
+        rfm_base
+        .join(fato_ritmo_max, on="cliente_id", how="left")
+        .withColumn(
+            "recencia_dias",
+            F.greatest(
+                F.lit(0),
+                F.datediff(ref_ritmo, F.col("ultimo_pedido_ritmo"))
+            ).cast("double")
+        )
+        .drop("ultimo_pedido_ritmo")
+        .withColumn(
+            "ticket_medio",
+            F.col("valor_total") / F.nullif(F.col("frequencia_pedidos"), F.lit(0.0))
+        )
+        .withColumn(
+            "margem_percentual",
+            F.col("margem_total") / F.nullif(F.col("valor_total"), F.lit(0.0))
+        )
     )
 
     # =====================================================================
     # GRUPO 2 — Ritmo (intervalos entre pedidos consecutivos)
     # =====================================================================
+    # ⚠️  VAZAMENTO CORRIGIDO: ref_ritmo foi definido no GRUPO 1 (RFM) para
+    # corrigir o vazamento em recencia_dias. Aqui, ref_ritmo = referencia - 7
+    # também é usado para filtrar datas_ritmo (sem pedidos da janela-alvo).
+    #
+    # O alvo `comprou_em_7d` marca se o cliente comprou na janela de 7 dias
+    # QUE COMEÇA na data de referência. Se usarmos a MESMA referência para
+    # calcular `atraso_relativo` ou `intervalo_medio_dias`, o modelo descobre:
+    #   "recência ≈ 0 E intervalo ≈ 7 dias → comprou na janela → alvo = 1".
+    # Ou seja, a feature contém a resposta — é um vazamento.
+    #
+    # Correção COMPLETA: calcular `intervalo_medio_dias`, `desvio_intervalo_dias`
+    # E `recencia_ritmo_dias` usando `ref_ritmo = referencia - 7`.
+    # Assim, NENHUM pedido da janela de 7 dias (referencia..referencia+7) entra
+    # na feature. A feature mede o atraso em relação ao padrão de ritmo que
+    # existia ANTES da janela, e não vaza o alvo.
+    #
+    # Exemplo (treino, referencia = 2026-08-01):
+    #   ref_ritmo = 2026-07-25
+    #   Pedidos de 2026-08-01 (alvo = 1) NÃO entram em nenhum cálculo.
+    #   Para cliente COMPRADOR: ultimo_pedido antes de ref_ritmo = 2026-07-18,
+    #     recencia_ritmo_dias = 7, intervalo_medio = 7, atraso = 7/7 = 1.
+    #   Para cliente NÃO-COMPRADOR: ultimo_pedido antes de ref_ritmo = 2026-07-11,
+    #     recencia_ritmo_dias = 14, intervalo_medio = 7, atraso = 14/7 = 2.
+    #   A diferença é legítima (predictivo) mas não vaza o alvo.
     datas_pedido = (
         fato
         .select("cliente_id", "pedido_id", "data_pedido")
@@ -123,36 +201,73 @@ def montar_features(referencia: str):
         .select("cliente_id", "data_pedido")
     )
 
+    # pedidos_ultimos_90d — pedidos distintos cuja data está nos 90 dias
+    # antes do corte (exclusive)
+    #
+    # ⚠️  VAZAMENTO CORRIGIDO: usávamos `ref_date` (= referencia) como limite
+    # inferior da janela de 90 dias. Mas a janela-alvo do modelo é
+    # [referencia, referencia+7]. Um cliente com pedido em 2026-07-29
+    # (entre ref_date - 2 e ref_date + 7) tinha pedidos_ultimos_90d contando
+    # esse pedido. Combinado com target=1 por construção, isso vaza o alvo
+    # (AUC ~ 0.99).
+    #
+    # Correção: usar `ref_ritmo` (= referencia - 7) como limite INFERIOR.
+    # A janela de "90 dias antes do início do período-alvo" exclui os
+    # pedidos da janela de 7 dias. O número representa "quantos pedidos
+    # o cliente fez nos 90 dias imediatamente antes da janela-alvo".
+    pedidos_90d = (
+        fato
+        .filter(F.col("data_pedido") >= F.date_sub(ref_ritmo, 90))
+        .filter(F.col("data_pedido") < ref_ritmo)
+        .groupBy("cliente_id")
+        .agg(F.countDistinct("pedido_id").cast("double").alias("pedidos_ultimos_90d"))
+    )
+
+    # ── Dados de ritmo: filtrados por ref_ritmo para excluir a janela de 7 dias ──
+    # Usa ref_ritmo (referencia - 7) como corte para que nenhuma ordem da janela
+    # de predição (referencia..referencia+7) apareça no cálculo de intervalo.
+    datas_ritmo = (
+        datas_pedido
+        .filter(F.col("data_pedido") < ref_ritmo)
+    )
+
+    # Gaps entre pedidos consecutivos (ambos os pedidos < ref_ritmo)
     w = Window.partitionBy("cliente_id").orderBy("data_pedido")
-    datas_pedido = datas_pedido.withColumn(
+    datas_ritmo = datas_ritmo.withColumn(
         "data_anterior", F.lag("data_pedido").over(w)
     ).withColumn(
         "gap_dias",
         F.datediff(F.col("data_pedido"), F.col("data_anterior")).cast("double")
     )
 
-    ritmo_base = datas_pedido.groupBy("cliente_id").agg(
+    ritmo_base = datas_ritmo.groupBy("cliente_id").agg(
         F.avg("gap_dias")      .alias("intervalo_medio_dias"),
         F.stddev_samp("gap_dias").alias("desvio_intervalo_dias"),
     )
 
-    # pedidos_ultimos_90d — pedidos distintos cuja data está nos 90 dias
-    # antes do corte (exclusive)
-    pedidos_90d = (
-        fato
-        .filter(F.col("data_pedido") >= F.date_sub(F.lit(referencia), 90))
+    # ── recencia_ritmo_dias: dias desde o último pedido ANTES de ref_ritmo ─────
+    # O último pedido "visível" é o max data_pedido < ref_ritmo.
+    # Para clientes cujo último pedido está em (ref_ritmo-7..ref_ritmo-1),
+    # recencia_ritmo_dias será 0..6 (estavam "no horário") — sinal legítimo.
+    recencia_ritmo = (
+        datas_ritmo
         .groupBy("cliente_id")
-        .agg(F.countDistinct("pedido_id").cast("double").alias("pedidos_ultimos_90d"))
+        .agg(F.max("data_pedido").alias("ultimo_pedido"))
+        .withColumn(
+            "recencia_ritmo_dias",
+            F.datediff(ref_ritmo, F.col("ultimo_pedido")).cast("double")
+        )
     )
 
     ritmo = (
         ritmo_base
         .join(pedidos_90d, on="cliente_id", how="left")
         .withColumn("pedidos_ultimos_90d", F.coalesce(F.col("pedidos_ultimos_90d"), F.lit(0.0)))
-        .join(rfm.select("cliente_id", "recencia_dias"), on="cliente_id", how="left")
+        .join(recencia_ritmo, on="cliente_id", how="left")
     )
 
-    # ── atraso_relativo: recencia_dias / intervalo_medio_dias, teto em 10 ──
+    # ── atraso_relativo: recencia_ritmo_dias / intervalo_medio_dias, teto em 10 ──
+    # Calculado inteiramente com dados < ref_ritmo (= referencia - 7).
     # ARMADILHA 1: F.least() ignora nulo e devolve o outro valor. Envolver
     # em when(intervalo_medio_dias IS NOT NULL AND > 0).
     ritmo = ritmo.withColumn(
@@ -160,7 +275,7 @@ def montar_features(referencia: str):
         F.when(
             F.col("intervalo_medio_dias").isNotNull() & (F.col("intervalo_medio_dias") > 0),
             F.least(
-                F.col("recencia_dias") / F.nullif(F.col("intervalo_medio_dias"), F.lit(0.0)),
+                F.col("recencia_ritmo_dias") / F.nullif(F.col("intervalo_medio_dias"), F.lit(0.0)),
                 F.lit(10.0)
             )
         ).otherwise(F.lit(10.0))
@@ -197,11 +312,19 @@ def montar_features(referencia: str):
         "taxa_ganho",
     )
 
-    # visitas_90d — visitas nos 90 dias antes do corte
+    # visitas_90d — visitas nos 90 dias antes da janela-alvo (exclusive)
     # "gerou_pedido" não existe — usa resultado = 'Pedido realizado'
+    #
+    # ⚠️  VAZAMENTO CORRIGIDO: o limite inferior era `ref_date - 90`
+    # (= referencia - 90). Mas o alvo do modelo é [referencia, referencia+7]
+    # e visitas entre `referencia - 7` e `referencia + 7` (inclusive o
+    # período-alvo) estão no conjunto de fatos. Usar `ref_ritmo` como
+    # limite SUPERIOR garante que a janela "90 dias antes da janela-alvo"
+    # nunca inclui visitas do período que estamos prevendo.
     crm_vis = (
         visitas
-        .filter(F.col("data_visita") >= F.date_sub(F.lit(referencia), 90))
+        .filter(F.col("data_visita") >= F.date_sub(ref_ritmo, 90))
+        .filter(F.col("data_visita") < ref_ritmo)
         .groupBy("cliente_id")
         .agg(
             F.count("*").cast("double").alias("visitas_90d"),
@@ -257,7 +380,7 @@ def montar_features(referencia: str):
 
     # comprou_lancamento: 1 se comprou algum SKU cuja data_lancamento esteja
     # nos 120 dias anteriores ao corte. Único join necessário com dim_produto.
-    limite_lancamento = F.date_sub(F.lit(referencia), 120)
+    limite_lancamento = F.date_sub(ref_date, 120)
     comprou_lancamento_df = (
         fato
         .join(produtos, on="sku", how="inner")
