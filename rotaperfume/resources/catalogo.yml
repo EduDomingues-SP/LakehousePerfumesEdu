@@ -1,0 +1,18 @@
+# Definição do catálogo como recurso do Databricks Asset Bundle.
+# O catálogo em si (lakehouse_rotaperfume) é criado via script SQL antes do deploy.
+# Aqui definimos os schemas e volumes que o bundle gerencia.
+
+resources:
+  schemas:
+    - name: bronze
+      catalog_name: ${var.catalog}
+    - name: silver
+      catalog_name: ${var.catalog}
+    - name: gold
+      catalog_name: ${var.catalog}
+
+  volumes:
+    - name: raw
+      schema_name: bronze
+      catalog_name: ${var.catalog}
+      volume_type: MANAGED

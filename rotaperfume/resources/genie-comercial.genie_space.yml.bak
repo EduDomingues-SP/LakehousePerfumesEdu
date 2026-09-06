@@ -1,0 +1,6 @@
+resources:
+  genie_spaces:
+    comercial:
+      title: "Genie Comercial — RotaPerfume"
+      warehouse_id: ${var.warehouse_id}
+      file_path: ../src/comercial.geniespace.json

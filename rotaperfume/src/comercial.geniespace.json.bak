@@ -1,0 +1,56 @@
+{
+  "description": "Espaço de vendas — RotaPerfume. Responde perguntas sobre clientes, fila semanal e estoque.",
+  "instructions": "Use sempre as tabelas e funções deste espaço. Nunca invente número, nome de cliente ou quantidade de estoque.",
+  "data_source_type": "WORKSPACE",
+  "data_sources": [
+    {
+      "function": {
+        "catalog": "lakehouse_rotaperfume",
+        "function": "checar_disponibilidade",
+        "schema": "gold"
+      }
+    },
+    {
+      "function": {
+        "catalog": "lakehouse_rotaperfume",
+        "function": "contexto_cliente",
+        "schema": "gold"
+      }
+    },
+    {
+      "function": {
+        "catalog": "lakehouse_rotaperfume",
+        "function": "priorizar_carteira",
+        "schema": "gold"
+      }
+    },
+    {
+      "function": {
+        "catalog": "lakehouse_rotaperfume",
+        "function": "sugerir_produtos",
+        "schema": "gold"
+      }
+    },
+    {
+      "table": {
+        "catalog": "lakehouse_rotaperfume",
+        "schema": "gold",
+        "table": "dim_cliente"
+      }
+    },
+    {
+      "table": {
+        "catalog": "lakehouse_rotaperfume",
+        "schema": "gold",
+        "table": "fila_semanal"
+      }
+    },
+    {
+      "table": {
+        "catalog": "lakehouse_rotaperfume",
+        "schema": "gold",
+        "table": "score_propensao"
+      }
+    }
+  ]
+}

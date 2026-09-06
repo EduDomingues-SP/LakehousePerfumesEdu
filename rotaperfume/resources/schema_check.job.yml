@@ -1,0 +1,11 @@
+resources:
+  jobs:
+    schema_check:
+      name: schema_check
+      tasks:
+        - task_key: check
+          notebook_task:
+            notebook_path: /Workspace/Users/domingues.edu72@gmail.com/.bundle/rotaperfume/dev/files/src/bronze/verificar_schema
+            base_parameters:
+              catalog: lakehouse_rotaperfume
+          timeout_seconds: 600

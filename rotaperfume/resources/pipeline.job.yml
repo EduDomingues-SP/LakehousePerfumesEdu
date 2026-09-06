@@ -168,8 +168,37 @@ resources:
           notebook_task:
             notebook_path: /Workspace/Users/domingues.edu72@gmail.com/.bundle/rotaperfume/dev/files/src/ml/11-features
           base_parameters:
-            referencia: ${var.referencia}
+            catalog: ${var.catalog}
           timeout_seconds: 1800
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        # ── Treino e Score do Modelo (ML) ────────────────────────────────
+        - task_key: ml_modelo
+          depends_on:
+            - task_key: ml_features
+          notebook_task:
+            notebook_path: /Workspace/Users/domingues.edu72@gmail.com/.bundle/rotaperfume/dev/files/src/ml/12-modelo
+          base_parameters:
+            catalog: ${var.catalog}
+          timeout_seconds: 1800
+          email_notifications:
+            on_failure:
+              - domingues.edu72@gmail.com
+
+        # ── Fila semanal + Funções do Agente (ML) ────────────────────────
+        # "A fila e o agente" — prompt 3.
+        # Cria gold.fila_semanal (200 clientes priorizados), as 4 funções SQL
+        # para o agente e 3 testes de qualidade.
+        - task_key: ml_fila
+          depends_on:
+            - task_key: ml_modelo
+          sql_task:
+            file:
+              path: sql-tasks/ml-fila-v2.sql
+            warehouse_id: ${var.warehouse_id}
+          timeout_seconds: 600
           email_notifications:
             on_failure:
               - domingues.edu72@gmail.com

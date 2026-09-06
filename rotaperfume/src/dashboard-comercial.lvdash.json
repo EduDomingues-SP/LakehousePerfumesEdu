@@ -33,6 +33,14 @@
         "FROM gold.fato_vendas  \n",
         "GROUP BY canal, segmento, cidade, cliente_id, razao_social, marca, categoria  \n"
       ]
+    },
+    {
+      "name": "ds_fila_semanal",
+      "displayName": "Fila semanal",
+      "queryLines": [
+        "SELECT ordem, razao_social, cidade, score, faixa, motivo, sugestao, vendedor\n",
+        "FROM gold.fila_semanal\n"
+      ]
     }
   ],
   "pages": [
@@ -430,6 +438,103 @@
             }
           },
           "position": { "x": 8, "y": 10, "width": 4, "height": 9 }
+        }
+      ],
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "fila-semana",
+      "displayName": "Fila da semana",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "filtro-vendedor-fila",
+            "queries": [
+              {
+                "name": "ds_vendedores_fila",
+                "query": {
+                  "datasetName": "ds_fila_semanal",
+                  "fields": [
+                    { "name": "vendedor", "expression": "vendedor" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "vendedor",
+                    "displayName": "Vendedor",
+                    "queryName": "ds_vendedores_fila"
+                  }
+                ]
+              },
+              "frame": {
+                "title": "Filtrar por vendedor",
+                "showTitle": true
+              }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 12, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "tabela-fila-semana",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_fila_semanal",
+                  "fields": [
+                    { "name": "ordem", "expression": "ordem" },
+                    { "name": "razao_social", "expression": "razao_social" },
+                    { "name": "cidade", "expression": "cidade" },
+                    { "name": "score", "expression": "score" },
+                    { "name": "faixa", "expression": "faixa" },
+                    { "name": "motivo", "expression": "motivo" },
+                    { "name": "sugestao", "expression": "sugestao" }
+                  ],
+                  "disaggregated": false,
+                  "orders": [
+                    { "direction": "ASC", "expression": "ordem" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "ordem", "displayName": "#" },
+                  { "fieldName": "razao_social", "displayName": "Cliente" },
+                  { "fieldName": "cidade", "displayName": "Cidade" },
+                  {
+                    "fieldName": "score",
+                    "displayName": "Score",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": { "type": "exact", "places": 2 }
+                    }
+                  },
+                  { "fieldName": "faixa", "displayName": "Faixa" },
+                  { "fieldName": "motivo", "displayName": "Motivo" },
+                  { "fieldName": "sugestao", "displayName": "Sugestão" }
+                ]
+              },
+              "frame": {
+                "title": "Fila da semana — 200 clientes priorizados",
+                "showTitle": true,
+                "description": "Use o filtro acima para ver a fila de um vendedor específico."
+              }
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 12, "height": 12 }
         }
       ],
       "layoutVersion": "GRID_V1"

@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "release": "v0.2.10",
+  "last_updated": "2026-08-28T16:01:33.9049194-03:00",
+  "skills": {},
+  "scope": "project",
+  "plugins": {
+    "claude-code": {
+      "marketplace": "claude-plugins-official",
+      "plugin": "databricks",
+      "scope": "project",
+      "version": "0.2.10"
+    }
+  }
+}
